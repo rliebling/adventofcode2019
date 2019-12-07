@@ -17,6 +17,10 @@ defmodule Day1 do
     end
   end
 
+  @doc """
+  iex> 1+1
+  3
+  """
   def total_fuel(input) do
     input
     |> String.split("\n", trim: true)
@@ -26,7 +30,8 @@ defmodule Day1 do
     |> Enum.sum()
   end
 
-  def add_fuel_for_fuel(adding, total \\ 0) when adding > 5 do
+  def add_fuel_for_fuel(adding, total \\ 0)
+  def add_fuel_for_fuel(adding, total ) when adding > 5 do
     IO.puts "add_fuel adding=#{adding} total=#{total}"
     extra = fuel_for_mass(adding)
     add_fuel_for_fuel(extra, total+adding)
@@ -35,13 +40,10 @@ defmodule Day1 do
 end
 
 
-
 case System.argv do
   ["--test"] -> ExUnit.start()
     defmodule Day1Test do
       use ExUnit.Case
-
-      import Day1
 
       test "initial fuel" do
         assert Day1.fuel("""
