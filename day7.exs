@@ -4,10 +4,36 @@ defmodule Day7 do
     perms = permutations([0,1,2,3,4])
     perms |> Enum.reduce(-999, fn perm, max_thrust -> max(run_sequence(perm, program), max_thrust) end)
   end
+  def optimize2(program) do
+    #run_sequence2([5,6,7,8,9], program) |> IO.inspect
+    perms = permutations([5,6,7,8,9])
+    perms |> Enum.reduce(-999, fn perm, max_thrust -> max(run_sequence2(perm, program), max_thrust) end)
+  end
+
+  def build_amp(program, phase, inp_value) do
+    {:output, out_val, amp}=compute(program, 0, [phase, inp_value])
+    {amp, out_val}
+  end
+  def run_sequence2(perm, program) do
+    {amps, output} = Enum.map_reduce(perm, 0, fn phase, acc -> build_amp(program, phase, acc) end)
+    run_loop(amps, output)
+  end
+
+  def run_loop([nil | _rest], input), do: input
+  def run_loop(amps, input) do
+    {new_amps, e_output} = amps
+              |> Enum.map_reduce(input, fn amp, prev_output -> result = amp.(prev_output)
+                  case result do
+                    {:output, out_value, amp_update} -> {amp_update, out_value}
+                    {:halt, out_value} -> {nil, out_value}
+                  end
+                end)
+    run_loop(new_amps, e_output)
+  end
 
   def run_sequence(perm, program) do
     perm
-    |> IO.inspect(label: "run_sequence")
+    # |> IO.inspect(label: "run_sequence")
     |> Enum.reduce(0, fn phase,prev_input -> run(program, phase, prev_input) end)
   end
 
@@ -30,47 +56,65 @@ defmodule Day7 do
   end
 
   def run(input,phase, prev_output) do
+    #     IO.inspect(phase, label: "phase")
+    # IO.inspect(prev_output, label: "prev_output")
+
+    result = input
+    #    |> List.replace_at(1, noun)
+    #|> List.replace_at(2, verb)
+    |> compute(0, [phase, prev_output])
+    # |> IO.inspect(label: "run")
+
+    case result do
+      {:halt, out_value} -> out_value
+      {:output, out_value, _fn} -> out_value
+    end
+  end
+
+  def run_cycle(input,phase, prev_output) do
     IO.inspect(phase, label: "phase")
     IO.inspect(prev_output, label: "prev_output")
 
-    input
+    result = input
     #    |> List.replace_at(1, noun)
     #|> List.replace_at(2, verb)
     |> compute(0, [phase, prev_output])
     |> IO.inspect(label: "run")
+
   end
 
   defp compute(input, pc, input_values, out_value \\ nil) do
     # IO.inspect({input, pc})
     op = get(input, pc)
     case parse_op(op) do
-      {:halt,_,_,_} -> IO.inspect(out_value, label: "output/halt:")
-      {:add,3, [m1, m2, m3], f} -> output = List.replace_at(input, get(input, pc+3), m1.(input, pc+1) + m2.(input, pc+2))
+      {:halt,_,_,_} -> {:halt, hd(input_values)}
+      {:add,3, [m1, m2, m3], _f} -> output = List.replace_at(input, get(input, pc+3), m1.(input, pc+1) + m2.(input, pc+2))
         compute(output, pc+4, input_values, out_value)
-      {:mult,3, [m1, m2, m3], f} -> output = List.replace_at(input, get(input, pc+3), m1.(input, pc+1) * m2.(input, pc+2))
+      {:mult,3, [m1, m2, m3], _f} -> output = List.replace_at(input, get(input, pc+3), m1.(input, pc+1) * m2.(input, pc+2))
         compute(output, pc+4, input_values, out_value)
-      {:input,1, [m1], f} -> #IO.puts("input a value")
+      {:input,1, [m1], _f} -> #IO.puts("input a value")
           #inp_value = IO.read(:stdio, :line) |> String.trim |> String.to_integer
           [inp_value | rest_of_input_values] = input_values
           output = List.replace_at(input, get(input, pc+1), inp_value) # ignore mode since writing
           compute(output, pc+2, rest_of_input_values, out_value)
-      {:output,1, [m1], f} -> 
+      {:output,1, [m1], _f} -> 
           out_value =  m1.(input, pc+1)
-          IO.puts("OUTPUT: #{out_value}")
-          compute(input, pc+2, input_values, out_value)
+          #IO.puts("OUTPUT: #{out_value}")
+          #compute(input, pc+2, input_values, out_value)
+          {:output, out_value, fn inp_value -> compute(input, pc+2, [inp_value]) end} #{:output, out_value, input, pc+2}
 
-      {:jump_if_true, 2, [m1, m2], f} -> IO.inspect( m1.(input, pc+1),label: "jit");case m1.(input, pc+1) != 0 do
+      {:jump_if_true, 2, [m1, m2], _f} -> case m1.(input, pc+1) != 0 do
         true -> compute(input, m2.(input, pc+2), input_values, out_value)
         false -> compute(input, pc+3, input_values, out_value) # skip!
       end
-      {:jump_if_false, 2, [m1, m2], f} -> case m1.(input, pc+1) != 0 do
+      {:jump_if_false, 2, [m1, m2], _f} -> case m1.(input, pc+1) != 0 do
         true -> compute(input, pc+3, input_values) # skip!
         false -> compute(input, m2.(input, pc+2), input_values, out_value)
       end
-      {:less_than, 3, [m1, m2, m3], f} -> result = if m1.(input, pc+1) < m2.(input, pc+2), do: 1, else: 0
+      {:less_than, 3, [m1, m2, m3], _f} -> result = if m1.(input, pc+1) < m2.(input, pc+2), do: 1, else: 0
                                           output = List.replace_at(input, get(input, pc+3), result)
                                           compute(output, pc+4, input_values, out_value)
-      {:equals, 3, [m1, m2, m3], f} -> result = if m1.(input, pc+1) == m2.(input, pc+2), do: 1, else: 0
+      {:equals, 3, [m1, m2, m3], _f} -> result = if m1.(input, pc+1) == m2.(input, pc+2), do: 1, else: 0
                                        output = List.replace_at(input, get(input, pc+3), result)
                                        compute(output, pc+4, input_values, out_value)
     end
@@ -137,10 +181,15 @@ case System.argv do
       program = Day7.init("3,31,3,32,1002,32,10,32,1001,31,-2,31,1007,31,0,33,1002,33,7,33,1,33,31,31,1,32,31,31,4,31,99,0,0,0")
       assert Day7.optimize(program) ==  65210
     end
+    test "day7 part2" do
+      program = Day7.init("3,26,1001,26,-4,26,3,27,1002,27,2,27,1,27,26,27,4,27,1001,28,-1,28,1005,28,6,99,0,0,5")
+      assert Day7.optimize2(program) ==  139629729
+    end
   end
 
   [input_file] -> input = Day7.init(File.read!(input_file))
                   Day7.optimize(input) |> IO.inspect(label: "step1")
+                  Day7.optimize2(input) |> IO.inspect(label: "step2")
 
   _ -> IO.puts("expected --test or input_file")
   #    System.halt(1)
