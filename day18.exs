@@ -10,21 +10,21 @@ defmodule Seen do
     Agent.start_link(fn -> Map.new() end, name: __MODULE__)
   end
 
-  def check_and_update(loc, keys, distance) do
+  def check_and_update(locs, keys, distance) do
     f = fn [h | tail] = _state -> {h, tail} end
 
     Agent.get_and_update(__MODULE__, fn seen ->
-      prev = Map.get(seen, {loc, keys}, nil)
+      prev = Map.get(seen, {locs, keys}, nil)
 
       case prev do
         nil ->
-          {false, Map.put(seen, {loc, keys}, distance)}
+          {false, Map.put(seen, {locs, keys}, distance)}
 
         _ ->
           if prev <= distance do
             {true, seen}
           else
-            {false, Map.put(seen, {loc, keys}, distance)}
+            {false, Map.put(seen, {locs, keys}, distance)}
           end
       end
     end)
@@ -34,7 +34,7 @@ end
 defmodule Graph do
   defstruct neighbors: %{}, distances: %{}, nodes: %{}, num_keys: 0
 
-  def new(map, _entrance) do
+  def new(map) do
     edges = map |> Enum.flat_map(&direct_edges(&1, map))
 
     g = Enum.reduce(edges, %Graph{}, &build_neighbors_and_distances/2)
@@ -83,6 +83,8 @@ defmodule Graph do
   end
 
   def eliminate_node(g, loc) do
+    # IO.puts("eliminate_node #{inspect(loc)} #{inspect(g.nodes[loc])}")
+
     pairs =
       for p1 <- g.neighbors[loc],
           p2 <- g.neighbors[loc],
@@ -189,13 +191,32 @@ defmodule Day18 do
   def contents(letter), do: letter
 
   defmodule Traversal do
-    defstruct loc: nil, keys: MapSet.new(), distance: 0, graph: nil, path: []
+    defstruct robot_locs: nil, keys: MapSet.new(), distance: 0, graph: nil, path: []
 
     # return list so can be flat mapped away
-    def advance(%Traversal{keys: keys, graph: g} = t, dest, add_distance) do
+    def advance(%Traversal{keys: keys, graph: g} = t, which_robot, dest, add_distance) do
       case g.nodes[dest] do
         {:key, k} ->
           # IO.puts("got key #{k} num nodes #{Map.size(g.neighbors)}")
+
+          # IO.puts("finding gate to remove for found key #{k} at #{inspect(dest)}")
+          # IO.inspect(
+          #   Enum.filter(g.nodes, fn
+          #     {loc, {:gate, _}} -> true
+          #     _ -> false
+          #   end)
+          # )
+
+          g =
+            case Enum.find(g.nodes, fn
+                   {_loc, {:gate, ^k}} -> true
+                   _ -> false
+                 end) do
+              {gate_loc, _} -> Graph.eliminate_node(g, gate_loc)
+              nil -> g
+            end
+
+          robot_locs = List.replace_at(t.robot_locs, which_robot, dest)
 
           [
             %Traversal{
@@ -203,31 +224,14 @@ defmodule Day18 do
               | keys: MapSet.put(keys, k),
                 path: [dest | t.path],
                 distance: t.distance + add_distance,
-                loc: dest
+                robot_locs: robot_locs,
+                graph: g
             }
           ]
 
+        # not allowed, as we'll remove gates as soon as their key is found
         {:gate, k} ->
-          case MapSet.member?(keys, k) do
-            false ->
-              # IO.puts("rejected by gate #{k}")
-              []
-
-            true ->
-              # IO.puts("got open gate #{k}")
-
-              [
-                %Traversal{
-                  t
-                  | path: [dest | t.path],
-                    distance: t.distance + add_distance,
-                    loc: dest
-                }
-              ]
-
-            _ ->
-              [t]
-          end
+          []
 
         _ ->
           [t]
@@ -238,12 +242,17 @@ defmodule Day18 do
   def part1({map, {entrance, :entrance}}) do
     Seen.start_link()
 
-    graph = Graph.new(map, entrance)
+    graph = Graph.new(map)
 
     IO.puts("part1: num_keys to start = #{graph.num_keys} entrance=#{inspect(entrance)}")
 
-    initial_state = :gb_sets.insert({0, %Traversal{graph: graph, loc: entrance}}, :gb_sets.new())
+    initial_state =
+      :gb_sets.insert({0, %Traversal{graph: graph, robot_locs: [entrance]}}, :gb_sets.new())
 
+    search(graph, initial_state)
+  end
+
+  def search(graph, initial_state) do
     set =
       Stream.iterate(initial_state, &advance_next_traversal/1)
       |> Enum.find(fn set ->
@@ -262,13 +271,51 @@ defmodule Day18 do
     t
   end
 
+  def part2(map) do
+    Seen.start_link()
+    map = map |> map_with_robots()
+    graph = Graph.new(map)
+
+    robot_locs =
+      Enum.filter(map, fn
+        {_loc, :entrance1} -> true
+        {_loc, :entrance2} -> true
+        {_loc, :entrance3} -> true
+        {_loc, :entrance4} -> true
+        _ -> false
+      end)
+      |> Enum.map(fn {loc, _} -> loc end)
+
+    IO.inspect(robot_locs)
+
+    initial_state =
+      :gb_sets.insert({0, %Traversal{graph: graph, robot_locs: robot_locs}}, :gb_sets.new())
+
+    search(graph, initial_state)
+  end
+
+  def map_with_robots(map) do
+    {{x, y}, :entrance} = Enum.find(map, fn {loc, type} -> type == :entrance end)
+
+    map
+    |> Map.delete({x, y})
+    |> Map.delete({x + 1, y})
+    |> Map.delete({x - 1, y})
+    |> Map.delete({x, y + 1})
+    |> Map.delete({x, y - 1})
+    |> Map.put({x + 1, y + 1}, :entrance1)
+    |> Map.put({x + 1, y - 1}, :entrance2)
+    |> Map.put({x - 1, y + 1}, :entrance3)
+    |> Map.put({x - 1, y - 1}, :entrance4)
+  end
+
   def advance_next_traversal(traversals) do
     # IO.inspect(traversals, label: "advance_next_traversal")
     {{_, t}, remaining_traversals} = :gb_sets.take_smallest(traversals)
 
     new_traversals =
       advance_traversal(t)
-      |> Enum.reject(&Seen.check_and_update(&1.loc, &1.keys, &1.distance))
+      |> Enum.reject(&Seen.check_and_update(&1.robot_locs, &1.keys, &1.distance))
 
     Enum.reduce(
       new_traversals,
@@ -278,17 +325,26 @@ defmodule Day18 do
   end
 
   def advance_traversal(t) do
-    loc = t.loc
-    nbrs = Map.get(t.graph.neighbors, loc)
-
     old_g = t.graph
-    new_g = Graph.eliminate_node(t.graph, loc)
 
-    # IO.puts("advance_traversal over #{MapSet.size(nbrs)} neighbors from #{inspect(loc)}")
-    Enum.flat_map(
-      nbrs,
-      &Traversal.advance(%Traversal{t | graph: new_g}, &1, Graph.edge_distance(old_g, loc, &1))
-    )
+    t.robot_locs
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {loc, which_robot} ->
+      nbrs = Map.get(t.graph.neighbors, loc)
+
+      new_g = Graph.eliminate_node(t.graph, loc)
+
+      # IO.puts("advance_traversal over #{MapSet.size(nbrs)} neighbors from #{inspect(loc)}")
+      Enum.flat_map(
+        nbrs,
+        &Traversal.advance(
+          %Traversal{t | graph: new_g},
+          which_robot,
+          &1,
+          Graph.edge_distance(old_g, loc, &1)
+        )
+      )
+    end)
   end
 
   # find_shortest_path
@@ -300,9 +356,6 @@ defmodule Day18 do
   #   * if gate w/no key, eliminate this possibility as there's no value to it
   #   * eliminate node any gates for which have keys - but then state must become each neighbor of that node, except 
   #   returning to same spot
-
-  def part2(_input) do
-  end
 end
 
 case System.argv() do
@@ -344,7 +397,8 @@ case System.argv() do
 
   [input_file] ->
     {map, entrance} = Day18.init(File.read!(input_file))
-    Day18.part1({map, entrance}) |> IO.inspect(label: "part1")
+    # Day18.part1({map, entrance}) |> IO.inspect(label: "part1")
+    Day18.part2(map) |> IO.inspect(label: "part2")
 
   #                p1 = Day18.part1(program) |> IO.inspect(label: "part1")
   # Day18.part2(program) |> IO.inspect(label: "part2")
