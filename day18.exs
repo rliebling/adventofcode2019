@@ -3,6 +3,34 @@
 #   defstruct from: nil, to: nil, distance: 0
 # end
 
+defmodule Seen do
+  use Agent
+
+  def start_link() do
+    Agent.start_link(fn -> Map.new() end, name: __MODULE__)
+  end
+
+  def check_and_update(loc, keys, distance) do
+    f = fn [h | tail] = _state -> {h, tail} end
+
+    Agent.get_and_update(__MODULE__, fn seen ->
+      prev = Map.get(seen, {loc, keys}, nil)
+
+      case prev do
+        nil ->
+          {false, Map.put(seen, {loc, keys}, distance)}
+
+        _ ->
+          if prev <= distance do
+            {true, seen}
+          else
+            {false, Map.put(seen, {loc, keys}, distance)}
+          end
+      end
+    end)
+  end
+end
+
 defmodule Graph do
   defstruct neighbors: %{}, distances: %{}, nodes: %{}, num_keys: 0
 
@@ -164,7 +192,7 @@ defmodule Day18 do
     defstruct loc: nil, keys: MapSet.new(), distance: 0, graph: nil, path: []
 
     # return list so can be flat mapped away
-    def advance(%Traversal{loc: src, keys: keys, graph: g} = t, dest, add_distance) do
+    def advance(%Traversal{keys: keys, graph: g} = t, dest, add_distance) do
       case g.nodes[dest] do
         {:key, k} ->
           # IO.puts("got key #{k} num nodes #{Map.size(g.neighbors)}")
@@ -208,35 +236,45 @@ defmodule Day18 do
   end
 
   def part1({map, {entrance, :entrance}}) do
+    Seen.start_link()
+
     graph = Graph.new(map, entrance)
 
     IO.puts("part1: num_keys to start = #{graph.num_keys} entrance=#{inspect(entrance)}")
 
-    initial_state = [%Traversal{graph: graph, loc: entrance}]
+    initial_state = :gb_sets.insert({0, %Traversal{graph: graph, loc: entrance}}, :gb_sets.new())
 
-    Stream.iterate(initial_state, &advance_all_traversals/1)
-    |> Enum.reduce_while(nil, &found_shortest_path?/2)
+    set =
+      Stream.iterate(initial_state, &advance_next_traversal/1)
+      |> Enum.find(fn set ->
+        {_, t} = :gb_sets.smallest(set)
+
+        IO.puts(
+          "smallest has #{MapSet.size(t.keys)} keys and #{t.distance} distance #{length(t.path)} path #{
+            Map.size(t.graph.neighbors)
+          } nbrs #{:gb_sets.size(set)} set size"
+        )
+
+        MapSet.size(t.keys) == t.graph.num_keys
+      end)
+
+    {distance, t} = :gb_sets.smallest(set)
+    t
   end
 
-  def found_shortest_path?(traversals, _acc) do
-    IO.puts(
-      "found? #{length(traversals)} max_keys=#{
-        Enum.max_by(traversals, fn t -> MapSet.size(t.keys) end).keys |> MapSet.size()
-      }"
+  def advance_next_traversal(traversals) do
+    # IO.inspect(traversals, label: "advance_next_traversal")
+    {{_, t}, remaining_traversals} = :gb_sets.take_smallest(traversals)
+
+    new_traversals =
+      advance_traversal(t)
+      |> Enum.reject(&Seen.check_and_update(&1.loc, &1.keys, &1.distance))
+
+    Enum.reduce(
+      new_traversals,
+      remaining_traversals,
+      &:gb_sets.add_element({&1.distance, &1}, &2)
     )
-
-    all_keys = Enum.filter(traversals, fn t -> MapSet.size(t.keys) == t.graph.num_keys end)
-
-    # IO.puts("found_shortest_path? #{length(all_keys)}")
-
-    case all_keys do
-      [] -> {:cont, nil}
-      _ -> {:halt, Enum.min_by(all_keys, & &1.distance)}
-    end
-  end
-
-  def advance_all_traversals(traversals) do
-    Enum.flat_map(traversals, &advance_traversal/1)
   end
 
   def advance_traversal(t) do
@@ -282,11 +320,10 @@ case System.argv() do
           #########
           """)
 
-        t =
-          Day18.part1(inp)
-          |> IO.inspect()
+        t = Day18.part1(inp)
 
         assert t.distance == 8
+        IO.inspect(t.path)
       end
 
       test "bigger test" do
@@ -299,8 +336,9 @@ case System.argv() do
           ########################
           """)
 
-        t = Day18.part1(inp) |> IO.inspect()
+        t = Day18.part1(inp)
         assert t.distance == 132
+        IO.inspect(t.path)
       end
     end
 
