@@ -60,11 +60,103 @@ defmodule Day22 do
     for posn <- 0..(deck_size - 1), do: Map.get(map_deck, posn_holds_which[posn])
   end
 
+  def part2c(instrs, deck_size, limit \\ 100) do
+    # approach will be to apply instructions in reverse order and invert them
+    # this way we transform what ends up in 2020 to where does 2020 go
+    # and, we compute the function for this as a polynomial in ZZ/deck_size
+
+    # if f(x)=ax+b, then
+    # f^2(x) = a(ax+b) +b = a2x+ab + b
+    # f^3(x) = a(a(ax+b) +b) + b = a3x+a2b + ab + b
+    # f^n(x) = a^nx + b(\sum_{0..n-1} a^i) = a^nx + b*(a^n -1)/(a-1)  (a(a2+a+1) - (a2+a+1)) = a3 + a2 + a -a2 -a-1
+    #        = [a^nx(a-1) + ba^n -b]/(a-1) = [a^{n+1}x +(b-x)a^n -b]/(a-1) 
+    # BUT = b = f(0) and a = f(1)-f(0)
+
+    # approach really will be, then, to track where 0 and 1 end up as 
+    # we INVERT the original instructions in reverse order, as this lets us decide where 2020 came from
+    # so, cuts work the opposite direction.  new_stack is the same, and incrs work the opposite...
+    init_p = {0, 1}
+
+    {zero, one} =
+      Enum.reduce(Enum.reverse(instrs), init_p, &p_deal(&1, &2, deck_size))
+      |> IO.inspect(label: "zero/one")
+
+    IO.puts("coeffs a,b = #{one - zero},#{zero}  (#{one - zero + deck_size})")
+    {a, b} = {one - zero, zero}
+
+    # map powers of 2 to bit in the num of iterations
+    bits =
+      Integer.to_string(101_741_582_076_661, 2)
+      |> String.split("", trim: true)
+      |> Enum.reverse()
+
+    ff = fn x -> rem(a * x + b, deck_size) end
+
+    compose = fn {a1, b1}, {a2, b2} ->
+      # f(g(x)) = a1(a2x+b2) + b1 =a1a2x+a1b2 + b1 === {a1a2, a1b2+b1}
+      {rem(a1 * a2, deck_size), rem(a1 * b2 + b1, deck_size)}
+    end
+
+    # f( f(f(x)) ) ==? (f(f))(f(x))
+    # a(a(ax+b)+b) +b = a3x+a2b+ab+b
+    # (a2x+ab+b)(ax+b) = a2(ax+b) + ab+b CHECK!
+    # ab_map will map i-> f^{2^i}.  so 0->f, 1->f^2, 2->f^4, where f^4 =f^2(f^2), representing each fxn by coeffs a,b for ax+b
+    ab_list =
+      Enum.map_reduce(0..(length(bits) - 1), {a, b}, fn power, {a, b} = f ->
+        # f(f(x)) = a(ax+b) + b =a2x+ab + b === {a2, ab+b}
+        new_ab = compose.(f, f)
+        {{a, b}, new_ab}
+      end)
+      |> elem(0)
+      |> IO.inspect(label: "ablist")
+
+    flimit =
+      Enum.zip(bits, ab_list)
+      |> Enum.reduce({1, 0}, fn
+        {"0", _f}, curr_ab ->
+          IO.puts("0 bit #{inspect(curr_ab)}")
+          curr_ab
+
+        {"1", f}, curr_ab ->
+          new = compose.(f, curr_ab)
+          IO.puts("1 bit #{inspect(curr_ab)}->#{inspect(new)}")
+          new
+      end)
+
+    normalize = fn x ->
+      if x < 0, do: x + deck_size, else: x
+    end
+
+    IO.puts(
+      "flimit=#{inspect(flimit)}  flimit(2020)=#{
+        normalize.(rem(2020 * elem(flimit, 0) + elem(flimit, 1), deck_size))
+      }"
+    )
+
+    init_f = fn pos -> pos end
+    new_f = Enum.reduce(instrs, init_f, &f_deal(&1, &2, deck_size))
+    IO.puts("f_deal way gets #{new_f.(0)} and #{new_f.(1)} for 0 and 1")
+  end
+
+  # reminder inverse is same as normal
+  def p_deal({:new_stack}, {zero, one}, deck_size),
+    do: {deck_size - zero - 1, deck_size - one - 1}
+
+  # invert the cut means change the direction
+  def p_deal({:cut, size}, {zero, one}, deck_size),
+    do: {rem(zero + size + deck_size, deck_size), rem(one + size + deck_size, deck_size)}
+
+  # to invert this is to divide the pos by the incr, but that is same as multiplying by Modular.inverse
+  def p_deal({:incr, incr}, {zero, one}, deck_size) do
+    inv = Modular.inverse(incr, deck_size)
+    {rem(zero * inv, deck_size), rem(one * inv, deck_size)}
+  end
+
   def part2(instrs, deck_size, limit \\ 100) do
     # factory deck
     init_f = fn pos -> pos end
 
-    new_f = Enum.reduce(instrs, init_f, &f_deal(&1, &2, limit))
+    new_f = Enum.reduce(instrs, init_f, &f_deal(&1, &2, deck_size))
 
     {first, repeat} =
       Stream.iterate(2020, &new_f.(&1))
@@ -253,7 +345,9 @@ case System.argv() do
 
     Day22.part1(inp, 10007) |> IO.inspect(label: "part1")
 
-    Day22.part2(inp, 119_315_717_514_047, 101_741_582_076_661) |> IO.inspect(label: "part2")
+    Day22.part2c(inp, 119_315_717_514_047, 101_741_582_076_661) |> IO.inspect(label: "part2")
+
+  #    Day22.part2b(inp, 119_315_717_514_047, 101_741_582_076_661) |> IO.inspect(label: "part2b")
 
   _ ->
     IO.puts("expected --test or input_file")
